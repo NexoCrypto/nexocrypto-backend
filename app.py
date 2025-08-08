@@ -2,7 +2,10 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
 import requests
-from datetime import datetime
+import hashlib
+import secrets
+import re
+from datetime import datetime, timedelta
 from telegram_mock import get_mock_validation, generate_mock_uuid
 
 app = Flask(__name__)
@@ -13,6 +16,11 @@ if os.environ.get('FLASK_ENV') == 'production':
     app.config['DEBUG'] = False
 else:
     app.config['DEBUG'] = True
+
+# Banco de dados simples em memória para usuários
+users_db = {}
+verification_codes = {}
+password_reset_tokens = {}
 
 # URL da API Telegram
 TELEGRAM_API_URL = "https://5002-iqrmmohoou2pzfnpp8zc0-6721939a.manusvm.computer/api"
@@ -34,6 +42,36 @@ def format_brazilian_date(date_str):
         return datetime.now().strftime('%d/%m/%Y - %H:%M')
     except:
         return datetime.now().strftime('%d/%m/%Y - %H:%M')
+
+def hash_password(password):
+    """Hash da senha usando SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def generate_verification_code():
+    """Gera código de verificação de 6 dígitos"""
+    return str(secrets.randbelow(900000) + 100000)
+
+def validate_email(email):
+    """Valida formato de e-mail"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+def validate_phone(phone):
+    """Valida formato de telefone brasileiro"""
+    # Remove caracteres não numéricos
+    phone_clean = re.sub(r'[^\d]', '', phone)
+    # Verifica se tem 10 ou 11 dígitos (com DDD)
+    return len(phone_clean) in [10, 11] and phone_clean.startswith(('11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99'))
+
+def send_sms_code(phone, code):
+    """Simula envio de SMS (em produção, usar serviço real como Twilio)"""
+    print(f"SMS enviado para {phone}: Código {code}")
+    return True
+
+def send_email_code(email, code):
+    """Simula envio de e-mail (em produção, usar serviço real como SendGrid)"""
+    print(f"E-mail enviado para {email}: Código {code}")
+    return True
 
 @app.route('/')
 def home():
@@ -211,6 +249,261 @@ def get_telegram_groups(uuid_code):
             return jsonify({'success': False, 'groups': []}), 200
     except Exception as e:
         return jsonify({'success': False, 'groups': []}), 200
+
+# Endpoints de Autenticação
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """Endpoint para cadastro de usuário"""
+    try:
+        data = request.get_json()
+        
+        # Validação dos dados
+        required_fields = ['name', 'email', 'phone', 'password']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'error': f'Campo {field} é obrigatório'}), 400
+        
+        email = data['email'].lower().strip()
+        phone = re.sub(r'[^\d]', '', data['phone'])
+        
+        # Validações
+        if not validate_email(email):
+            return jsonify({'error': 'E-mail inválido'}), 400
+        
+        if not validate_phone(phone):
+            return jsonify({'error': 'Telefone inválido'}), 400
+        
+        if len(data['password']) < 8:
+            return jsonify({'error': 'Senha deve ter pelo menos 8 caracteres'}), 400
+        
+        # Verifica se usuário já existe
+        if email in users_db:
+            return jsonify({'error': 'E-mail já cadastrado'}), 400
+        
+        # Gera códigos de verificação
+        email_code = generate_verification_code()
+        sms_code = generate_verification_code()
+        
+        # Armazena dados temporários
+        temp_user_id = secrets.token_urlsafe(16)
+        verification_codes[temp_user_id] = {
+            'user_data': {
+                'name': data['name'].strip(),
+                'email': email,
+                'phone': phone,
+                'password_hash': hash_password(data['password'])
+            },
+            'email_code': email_code,
+            'sms_code': sms_code,
+            'created_at': datetime.now(),
+            'verified_email': False,
+            'verified_sms': False
+        }
+        
+        # Simula envio dos códigos
+        send_email_code(email, email_code)
+        send_sms_code(phone, sms_code)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Códigos de verificação enviados',
+            'temp_user_id': temp_user_id,
+            'email_code': email_code,  # Para teste
+            'sms_code': sms_code       # Para teste
+        })
+        
+    except Exception as e:
+        return jsonify({'error': 'Erro interno do servidor'}), 500
+
+@app.route('/api/auth/verify', methods=['POST'])
+def verify_codes():
+    """Endpoint para verificar códigos de validação"""
+    try:
+        data = request.get_json()
+        
+        temp_user_id = data.get('temp_user_id')
+        email_code = data.get('email_code')
+        sms_code = data.get('sms_code')
+        
+        if not all([temp_user_id, email_code, sms_code]):
+            return jsonify({'error': 'Dados incompletos'}), 400
+        
+        # Verifica se existe
+        if temp_user_id not in verification_codes:
+            return jsonify({'error': 'Sessão inválida ou expirada'}), 400
+        
+        verification_data = verification_codes[temp_user_id]
+        
+        # Verifica se não expirou (30 minutos)
+        if datetime.now() - verification_data['created_at'] > timedelta(minutes=30):
+            del verification_codes[temp_user_id]
+            return jsonify({'error': 'Códigos expirados'}), 400
+        
+        # Verifica códigos
+        if (email_code == verification_data['email_code'] and 
+            sms_code == verification_data['sms_code']):
+            
+            # Cria usuário definitivo
+            user_data = verification_data['user_data']
+            user_id = secrets.token_urlsafe(16)
+            
+            users_db[user_data['email']] = {
+                'id': user_id,
+                'name': user_data['name'],
+                'email': user_data['email'],
+                'phone': user_data['phone'],
+                'password_hash': user_data['password_hash'],
+                'created_at': datetime.now(),
+                'verified': True,
+                'plan': 'free'  # Plano inicial
+            }
+            
+            # Remove dados temporários
+            del verification_codes[temp_user_id]
+            
+            return jsonify({
+                'success': True,
+                'message': 'Conta criada com sucesso',
+                'user_id': user_id
+            })
+        else:
+            return jsonify({'error': 'Códigos inválidos'}), 400
+            
+    except Exception as e:
+        return jsonify({'error': 'Erro interno do servidor'}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Endpoint para login"""
+    try:
+        data = request.get_json()
+        
+        email = data.get('email', '').lower().strip()
+        password = data.get('password', '')
+        
+        if not email or not password:
+            return jsonify({'error': 'E-mail e senha são obrigatórios'}), 400
+        
+        # Verifica credenciais admin (mantém para testes)
+        admin_credentials = [
+            {'email': 'admin@nexocrypto.app', 'password': 'NexoCrypto2025!@#'},
+            {'email': 'nexoadmin', 'password': 'Crypto@Admin123'}
+        ]
+        
+        for admin in admin_credentials:
+            if (email == admin['email'] or email == admin['email'].lower()) and password == admin['password']:
+                return jsonify({
+                    'success': True,
+                    'message': 'Login realizado com sucesso',
+                    'user': {
+                        'id': 'admin',
+                        'name': 'Administrador',
+                        'email': admin['email'],
+                        'plan': 'admin'
+                    },
+                    'token': 'admin_token'
+                })
+        
+        # Verifica usuários cadastrados
+        if email in users_db:
+            user = users_db[email]
+            if user['password_hash'] == hash_password(password):
+                return jsonify({
+                    'success': True,
+                    'message': 'Login realizado com sucesso',
+                    'user': {
+                        'id': user['id'],
+                        'name': user['name'],
+                        'email': user['email'],
+                        'plan': user['plan']
+                    },
+                    'token': secrets.token_urlsafe(32)
+                })
+        
+        return jsonify({'error': 'Credenciais inválidas'}), 401
+        
+    except Exception as e:
+        return jsonify({'error': 'Erro interno do servidor'}), 500
+
+@app.route('/api/auth/forgot-password', methods=['POST'])
+def forgot_password():
+    """Endpoint para recuperação de senha"""
+    try:
+        data = request.get_json()
+        email = data.get('email', '').lower().strip()
+        
+        if not email or not validate_email(email):
+            return jsonify({'error': 'E-mail inválido'}), 400
+        
+        # Verifica se usuário existe
+        if email in users_db:
+            # Gera token de reset
+            reset_token = secrets.token_urlsafe(32)
+            password_reset_tokens[reset_token] = {
+                'email': email,
+                'created_at': datetime.now()
+            }
+            
+            # Simula envio de e-mail
+            print(f"E-mail de recuperação enviado para {email} com token: {reset_token}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'E-mail de recuperação enviado',
+                'reset_token': reset_token  # Para teste
+            })
+        else:
+            # Por segurança, sempre retorna sucesso
+            return jsonify({
+                'success': True,
+                'message': 'Se o e-mail existir, você receberá instruções de recuperação'
+            })
+            
+    except Exception as e:
+        return jsonify({'error': 'Erro interno do servidor'}), 500
+
+@app.route('/api/auth/reset-password', methods=['POST'])
+def reset_password():
+    """Endpoint para redefinir senha"""
+    try:
+        data = request.get_json()
+        
+        reset_token = data.get('reset_token')
+        new_password = data.get('new_password')
+        
+        if not reset_token or not new_password:
+            return jsonify({'error': 'Token e nova senha são obrigatórios'}), 400
+        
+        if len(new_password) < 8:
+            return jsonify({'error': 'Senha deve ter pelo menos 8 caracteres'}), 400
+        
+        # Verifica token
+        if reset_token not in password_reset_tokens:
+            return jsonify({'error': 'Token inválido'}), 400
+        
+        token_data = password_reset_tokens[reset_token]
+        
+        # Verifica se não expirou (1 hora)
+        if datetime.now() - token_data['created_at'] > timedelta(hours=1):
+            del password_reset_tokens[reset_token]
+            return jsonify({'error': 'Token expirado'}), 400
+        
+        # Atualiza senha
+        email = token_data['email']
+        if email in users_db:
+            users_db[email]['password_hash'] = hash_password(new_password)
+            del password_reset_tokens[reset_token]
+            
+            return jsonify({
+                'success': True,
+                'message': 'Senha redefinida com sucesso'
+            })
+        else:
+            return jsonify({'error': 'Usuário não encontrado'}), 404
+            
+    except Exception as e:
+        return jsonify({'error': 'Erro interno do servidor'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
