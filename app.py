@@ -14,7 +14,7 @@ else:
     app.config['DEBUG'] = True
 
 # URL da API Telegram
-TELEGRAM_API_URL = "http://localhost:5002/api"
+TELEGRAM_API_URL = "https://5002-iqrmmohoou2pzfnpp8zc0-6721939a.manusvm.computer/api"
 
 def format_brazilian_date(date_str):
     """Converte data para formato brasileiro"""
