@@ -1125,6 +1125,57 @@ def get_userbot_status():
             }
         })
 
+from userbot_endpoints import start_userbot_session, verify_userbot_code, get_userbot_groups
+
+# Endpoint para iniciar sessão do userbot
+@app.route('/api/userbot/start-session', methods=['POST'])
+def start_userbot_session_endpoint():
+    """Inicia sessão do userbot"""
+    try:
+        data = request.get_json()
+        uuid = data.get('uuid')
+        phone_number = data.get('phone_number')
+        
+        if not uuid or not phone_number:
+            return jsonify({
+                'success': False,
+                'error': 'UUID e telefone são obrigatórios'
+            }), 400
+        
+        result = start_userbot_session(uuid, phone_number)
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# Endpoint para verificar código do userbot
+@app.route('/api/userbot/verify-code', methods=['POST'])
+def verify_userbot_code_endpoint():
+    """Verifica código de autorização do userbot"""
+    try:
+        data = request.get_json()
+        uuid = data.get('uuid')
+        phone_number = data.get('phone_number')
+        code = data.get('code')
+        
+        if not uuid or not phone_number or not code:
+            return jsonify({
+                'success': False,
+                'error': 'UUID, telefone e código são obrigatórios'
+            }), 400
+        
+        result = verify_userbot_code(uuid, phone_number, code)
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
