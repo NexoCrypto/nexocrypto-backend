@@ -1046,14 +1046,14 @@ def save_user_real_groups(uuid_code, phone_number, groups):
         # Remove grupos antigos do userbot para este usuário
         cursor.execute('''
             DELETE FROM telegram_groups 
-            WHERE uuid = ? AND source = 'userbot_real'
+            WHERE user_uuid = ? AND source = 'userbot_real'
         ''', (uuid_code,))
         
         # Adiciona novos grupos reais
         for group in groups:
             cursor.execute('''
                 INSERT INTO telegram_groups 
-                (uuid, group_id, group_name, group_type, is_monitored, signals_count, source, phone_number)
+                (user_uuid, group_id, group_name, group_type, is_monitored, signals_count, source, phone_number)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 uuid_code,
