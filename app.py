@@ -214,41 +214,179 @@ def get_news():
 def generate_telegram_uuid():
     """Gera UUID para validação Telegram"""
     try:
-        response = requests.post(f"{TELEGRAM_API_URL}/generate-uuid", timeout=5)
-        if response.status_code == 200:
-            return jsonify(response.json())
-        else:
-            # Fallback para dados mock
-            return jsonify(generate_mock_uuid())
+        # Gera UUID único
+        import uuid
+        new_uuid = str(uuid.uuid4())
+        
+        # Armazena UUID temporariamente (em produção usar banco de dados)
+        if not hasattr(app, 'telegram_uuids'):
+            app.telegram_uuids = {}
+        
+        app.telegram_uuids[new_uuid] = {
+            'created_at': datetime.now(),
+            'validated': False,
+            'username': None
+        }
+        
+        return jsonify({
+            'success': True,
+            'uuid': new_uuid,
+            'message': 'UUID gerado com sucesso'
+        })
     except Exception as e:
-        # Fallback para dados mock em caso de erro
-        return jsonify(generate_mock_uuid())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/validate', methods=['POST'])
+def validate_telegram_uuid():
+    """Valida UUID via bot Telegram"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        username = data.get('username')
+        
+        if not uuid_code or not username:
+            return jsonify({
+                'success': False,
+                'error': 'UUID e username são obrigatórios'
+            }), 400
+        
+        # Verifica se UUID existe
+        if not hasattr(app, 'telegram_uuids'):
+            app.telegram_uuids = {}
+        
+        if uuid_code not in app.telegram_uuids:
+            return jsonify({
+                'success': False,
+                'error': 'UUID não encontrado'
+            }), 404
+        
+        # Marca como validado
+        app.telegram_uuids[uuid_code]['validated'] = True
+        app.telegram_uuids[uuid_code]['username'] = username
+        app.telegram_uuids[uuid_code]['validated_at'] = datetime.now()
+        
+        return jsonify({
+            'success': True,
+            'message': 'UUID validado com sucesso',
+            'username': username
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/api/telegram/check-validation/<uuid_code>', methods=['GET'])
 def check_telegram_validation(uuid_code):
     """Verifica validação do UUID Telegram"""
     try:
-        response = requests.get(f"{TELEGRAM_API_URL}/check-validation/{uuid_code}", timeout=5)
-        if response.status_code == 200:
-            return jsonify(response.json())
-        else:
-            # Fallback para dados mock
-            return jsonify(get_mock_validation(uuid_code))
+        if not hasattr(app, 'telegram_uuids'):
+            app.telegram_uuids = {}
+        
+        if uuid_code not in app.telegram_uuids:
+            return jsonify({
+                'success': False,
+                'validated': False,
+                'error': 'UUID não encontrado'
+            })
+        
+        uuid_data = app.telegram_uuids[uuid_code]
+        
+        return jsonify({
+            'success': True,
+            'validated': uuid_data['validated'],
+            'username': uuid_data.get('username'),
+            'validated_at': uuid_data.get('validated_at').isoformat() if uuid_data.get('validated_at') else None
+        })
+        
     except Exception as e:
-        # Fallback para dados mock em caso de erro
-        return jsonify(get_mock_validation(uuid_code))
+        return jsonify({
+            'success': False,
+            'validated': False,
+            'error': str(e)
+        })
+
+@app.route('/api/telegram/disconnect', methods=['POST'])
+def disconnect_telegram():
+    """Desconecta usuário do Telegram"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        
+        if not uuid_code:
+            return jsonify({
+                'success': False,
+                'error': 'UUID é obrigatório'
+            }), 400
+        
+        if not hasattr(app, 'telegram_uuids'):
+            app.telegram_uuids = {}
+        
+        if uuid_code in app.telegram_uuids:
+            # Remove UUID da memória
+            del app.telegram_uuids[uuid_code]
+        
+        return jsonify({
+            'success': True,
+            'message': 'Desconectado do Telegram com sucesso'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/api/telegram/user-groups/<uuid_code>', methods=['GET'])
 def get_telegram_groups(uuid_code):
     """Retorna grupos conectados do usuário"""
     try:
-        response = requests.get(f"{TELEGRAM_API_URL}/user-groups/{uuid_code}", timeout=5)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return jsonify({'success': False, 'groups': []}), 200
+        if not hasattr(app, 'telegram_uuids'):
+            app.telegram_uuids = {}
+        
+        if uuid_code not in app.telegram_uuids:
+            return jsonify({
+                'success': False,
+                'groups': [],
+                'error': 'UUID não encontrado'
+            })
+        
+        uuid_data = app.telegram_uuids[uuid_code]
+        
+        if not uuid_data['validated']:
+            return jsonify({
+                'success': False,
+                'groups': [],
+                'error': 'UUID não validado'
+            })
+        
+        # Grupos mock (em produção, buscar do banco de dados)
+        groups = [
+            {
+                'id': 1,
+                'name': 'NexoCrypto Bot',
+                'type': 'bot',
+                'status': 'connected',
+                'signals_count': 0,
+                'last_signal': None
+            }
+        ]
+        
+        return jsonify({
+            'success': True,
+            'groups': groups
+        })
+        
     except Exception as e:
-        return jsonify({'success': False, 'groups': []}), 200
+        return jsonify({
+            'success': False,
+            'groups': [],
+            'error': str(e)
+        })
 
 # Endpoints de Autenticação
 
