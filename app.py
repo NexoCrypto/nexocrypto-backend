@@ -526,8 +526,39 @@ def get_telegram_groups(uuid_code):
                 'status': 'monitored' if group[3] else 'available'
             })
         
-        # Se não há grupos, adiciona grupos mock para demonstração
+        # Se não há grupos, tenta obter via userbot primeiro
         if not groups:
+            try:
+                import requests
+                response = requests.get(f'http://localhost:5003/api/userbot/user-groups/{uuid_code}',
+                                      timeout=10)
+                
+                if response.status_code == 200:
+                    userbot_data = response.json()
+                    if userbot_data.get('success') and userbot_data.get('groups'):
+                        # Retorna grupos reais do userbot
+                        real_groups = []
+                        for group in userbot_data['groups']:
+                            real_groups.append({
+                                'id': group.get('id'),
+                                'name': group.get('name'),
+                                'type': group.get('type', 'group'),
+                                'is_monitored': False,
+                                'signals_count': 0,
+                                'last_signal': None,
+                                'added_at': datetime.now().isoformat(),
+                                'status': 'available'
+                            })
+                        
+                        return jsonify({
+                            'success': True,
+                            'groups': real_groups,
+                            'source': 'userbot'
+                        })
+            except Exception as e:
+                print(f"Erro ao acessar userbot: {e}")
+            
+            # Fallback para grupos demo se userbot falhar
             groups = [
                 {
                     'id': 'demo_1',
