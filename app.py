@@ -868,6 +868,212 @@ def reset_password():
     except Exception as e:
         return jsonify({'error': 'Erro interno do servidor'}), 500
 
+# Integração com UserBot para grupos reais
+@app.route('/api/telegram/start-userbot-session', methods=['POST'])
+def start_userbot_session():
+    """Inicia sessão do userbot para capturar grupos reais"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        phone_number = data.get('phone_number')
+        
+        if not uuid_code or not phone_number:
+            return jsonify({
+                'success': False,
+                'error': 'UUID e número de telefone são obrigatórios'
+            }), 400
+        
+        # Chama API do userbot
+        import requests
+        response = requests.post('http://localhost:5003/api/userbot/start-session', 
+                               json={'uuid': uuid_code, 'phone_number': phone_number},
+                               timeout=30)
+        
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Erro na comunicação com userbot'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/verify-userbot-code', methods=['POST'])
+def verify_userbot_code():
+    """Verifica código de autenticação do userbot"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        phone_number = data.get('phone_number')
+        code = data.get('code')
+        
+        if not all([uuid_code, phone_number, code]):
+            return jsonify({
+                'success': False,
+                'error': 'UUID, telefone e código são obrigatórios'
+            }), 400
+        
+        # Chama API do userbot
+        import requests
+        response = requests.post('http://localhost:5003/api/userbot/verify-code', 
+                               json={
+                                   'uuid': uuid_code, 
+                                   'phone_number': phone_number,
+                                   'code': code
+                               },
+                               timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            # Se autenticação foi bem-sucedida, atualiza banco local
+            if result.get('success') and result.get('user'):
+                user_data = result['user']
+                
+                # Atualiza dados do usuário no banco local
+                cursor.execute('''
+                    UPDATE telegram_users 
+                    SET telegram_username = ?, telegram_user_id = ?, is_validated = TRUE, validated_at = ?
+                    WHERE uuid = ?
+                ''', (user_data.get('username'), user_data.get('id'), datetime.now(), uuid_code))
+                
+                conn.commit()
+                
+            return jsonify(result)
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Erro na comunicação com userbot'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/user-groups/<uuid_code>', methods=['GET'])
+def get_user_groups_from_userbot(uuid_code):
+    """Obtém grupos reais do usuário via userbot"""
+    try:
+        # Chama API do userbot
+        import requests
+        response = requests.get(f'http://localhost:5003/api/userbot/user-groups/{uuid_code}',
+                              timeout=30)
+        
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Erro na comunicação com userbot'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/toggle-group-monitoring', methods=['POST'])
+def toggle_group_monitoring_userbot():
+    """Ativa/desativa monitoramento de grupo via userbot"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        group_id = data.get('group_id')
+        is_monitored = data.get('is_monitored')
+        
+        if not all([uuid_code, group_id is not None, is_monitored is not None]):
+            return jsonify({
+                'success': False,
+                'error': 'UUID, group_id e is_monitored são obrigatórios'
+            }), 400
+        
+        # Chama API do userbot
+        import requests
+        response = requests.post('http://localhost:5003/api/userbot/toggle-group-monitoring', 
+                               json={
+                                   'uuid': uuid_code,
+                                   'group_id': group_id,
+                                   'is_monitored': is_monitored
+                               },
+                               timeout=30)
+        
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Erro na comunicação com userbot'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/captured-signals/<uuid_code>', methods=['GET'])
+def get_captured_signals_from_userbot(uuid_code):
+    """Obtém sinais capturados via userbot"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        
+        # Chama API do userbot
+        import requests
+        response = requests.get(f'http://localhost:5003/api/userbot/captured-signals/{uuid_code}',
+                              params={'limit': limit},
+                              timeout=30)
+        
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Erro na comunicação com userbot'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/userbot-status', methods=['GET'])
+def get_userbot_status():
+    """Obtém status do userbot"""
+    try:
+        # Chama API do userbot
+        import requests
+        response = requests.get('http://localhost:5003/api/userbot/status',
+                              timeout=10)
+        
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'UserBot não está respondendo',
+                'status': {
+                    'userbot_running': False
+                }
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': 'UserBot não está acessível',
+            'status': {
+                'userbot_running': False
+            }
+        })
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
