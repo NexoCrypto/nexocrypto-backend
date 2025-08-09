@@ -41,6 +41,7 @@ def init_telegram_db():
             username TEXT,
             first_name TEXT,
             last_name TEXT,
+            phone_number TEXT,
             validated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
