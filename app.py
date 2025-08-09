@@ -309,19 +309,20 @@ def generate_telegram_uuid():
 
 @app.route('/api/telegram/validate', methods=['POST'])
 def validate_telegram_uuid():
-    """Valida UUID via bot Telegram com persistência"""
+    """Valida UUID via bot Telegram com persistência e inicia userbot"""
     try:
         data = request.get_json()
         uuid_code = data.get('uuid')
-        username = data.get('username')
-        telegram_id = data.get('telegram_id')
-        first_name = data.get('first_name', '')
-        last_name = data.get('last_name', '')
+        username = data.get('telegram_username')
+        telegram_id = data.get('telegram_user_id')
+        first_name = data.get('telegram_first_name', '')
+        last_name = data.get('telegram_last_name', '')
+        phone_number = data.get('phone_number')
         
-        if not uuid_code or not username:
+        if not uuid_code or not username or not phone_number:
             return jsonify({
                 'success': False,
-                'error': 'UUID e username são obrigatórios'
+                'error': 'UUID, username e phone_number são obrigatórios'
             }), 400
         
         # Conecta ao banco de dados
@@ -337,17 +338,35 @@ def validate_telegram_uuid():
             cursor.execute('''
                 UPDATE telegram_users 
                 SET telegram_id = ?, username = ?, first_name = ?, last_name = ?, 
-                    validated_at = CURRENT_TIMESTAMP, is_active = TRUE
+                    phone_number = ?, validated_at = CURRENT_TIMESTAMP, is_active = TRUE
                 WHERE uuid = ?
-            ''', (telegram_id, username, first_name, last_name, uuid_code))
+            ''', (telegram_id, username, first_name, last_name, phone_number, uuid_code))
         else:
             # Insere novo usuário
             cursor.execute('''
-                INSERT INTO telegram_users (uuid, telegram_id, username, first_name, last_name)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (uuid_code, telegram_id, username, first_name, last_name))
+                INSERT INTO telegram_users (uuid, telegram_id, username, first_name, last_name, phone_number)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (uuid_code, telegram_id, username, first_name, last_name, phone_number))
         
         conn.commit()
+        
+        # Inicia captura de grupos via userbot
+        try:
+            import requests
+            userbot_response = requests.post('http://localhost:5003/api/userbot/start-session',
+                                           json={
+                                               'uuid': uuid_code,
+                                               'phone_number': phone_number
+                                           }, timeout=30)
+            
+            if userbot_response.status_code == 200:
+                userbot_data = userbot_response.json()
+                print(f"UserBot iniciado para {uuid_code}: {userbot_data.get('status')}")
+            else:
+                print(f"Erro ao iniciar userbot: {userbot_response.status_code}")
+                
+        except Exception as e:
+            print(f"Erro na comunicação com userbot: {e}")
         conn.close()
         
         # Também mantém em memória para compatibilidade
