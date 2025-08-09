@@ -5,6 +5,8 @@ import requests
 import hashlib
 import secrets
 import re
+import sqlite3
+import json
 from datetime import datetime, timedelta
 from telegram_mock import get_mock_validation, generate_mock_uuid
 
@@ -21,6 +23,72 @@ else:
 users_db = {}
 verification_codes = {}
 password_reset_tokens = {}
+
+# Banco de dados SQLite para persistência Telegram
+DATABASE_PATH = 'nexocrypto_telegram.db'
+
+def init_telegram_db():
+    """Inicializa banco de dados para Telegram"""
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    
+    # Tabela de usuários Telegram validados
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS telegram_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT UNIQUE NOT NULL,
+            telegram_id INTEGER,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            validated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Tabela de grupos Telegram
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS telegram_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_uuid TEXT NOT NULL,
+            group_id INTEGER NOT NULL,
+            group_name TEXT NOT NULL,
+            group_type TEXT DEFAULT 'group',
+            is_monitored BOOLEAN DEFAULT FALSE,
+            signals_count INTEGER DEFAULT 0,
+            last_signal_at TIMESTAMP,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_uuid) REFERENCES telegram_users (uuid)
+        )
+    ''')
+    
+    # Tabela de sinais capturados
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trading_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_uuid TEXT NOT NULL,
+            group_id INTEGER NOT NULL,
+            symbol TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            entry_price REAL,
+            stop_loss REAL,
+            take_profit_1 REAL,
+            take_profit_2 REAL,
+            take_profit_3 REAL,
+            leverage INTEGER DEFAULT 1,
+            confidence_score REAL DEFAULT 0.0,
+            raw_message TEXT,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_uuid) REFERENCES telegram_users (uuid)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# Inicializar banco na inicialização
+init_telegram_db()
 
 # URL da API Telegram
 TELEGRAM_API_URL = "https://5002-iqrmmohoou2pzfnpp8zc0-6721939a.manusvm.computer/api"
@@ -241,11 +309,14 @@ def generate_telegram_uuid():
 
 @app.route('/api/telegram/validate', methods=['POST'])
 def validate_telegram_uuid():
-    """Valida UUID via bot Telegram"""
+    """Valida UUID via bot Telegram com persistência"""
     try:
         data = request.get_json()
         uuid_code = data.get('uuid')
         username = data.get('username')
+        telegram_id = data.get('telegram_id')
+        first_name = data.get('first_name', '')
+        last_name = data.get('last_name', '')
         
         if not uuid_code or not username:
             return jsonify({
@@ -253,20 +324,42 @@ def validate_telegram_uuid():
                 'error': 'UUID e username são obrigatórios'
             }), 400
         
-        # Verifica se UUID existe
+        # Conecta ao banco de dados
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Verifica se UUID já existe
+        cursor.execute('SELECT * FROM telegram_users WHERE uuid = ?', (uuid_code,))
+        existing_user = cursor.fetchone()
+        
+        if existing_user:
+            # Atualiza dados do usuário existente
+            cursor.execute('''
+                UPDATE telegram_users 
+                SET telegram_id = ?, username = ?, first_name = ?, last_name = ?, 
+                    validated_at = CURRENT_TIMESTAMP, is_active = TRUE
+                WHERE uuid = ?
+            ''', (telegram_id, username, first_name, last_name, uuid_code))
+        else:
+            # Insere novo usuário
+            cursor.execute('''
+                INSERT INTO telegram_users (uuid, telegram_id, username, first_name, last_name)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (uuid_code, telegram_id, username, first_name, last_name))
+        
+        conn.commit()
+        conn.close()
+        
+        # Também mantém em memória para compatibilidade
         if not hasattr(app, 'telegram_uuids'):
             app.telegram_uuids = {}
         
-        if uuid_code not in app.telegram_uuids:
-            return jsonify({
-                'success': False,
-                'error': 'UUID não encontrado'
-            }), 404
-        
-        # Marca como validado
-        app.telegram_uuids[uuid_code]['validated'] = True
-        app.telegram_uuids[uuid_code]['username'] = username
-        app.telegram_uuids[uuid_code]['validated_at'] = datetime.now()
+        app.telegram_uuids[uuid_code] = {
+            'validated': True,
+            'username': username,
+            'telegram_id': telegram_id,
+            'validated_at': datetime.now()
+        }
         
         return jsonify({
             'success': True,
@@ -282,8 +375,30 @@ def validate_telegram_uuid():
 
 @app.route('/api/telegram/check-validation/<uuid_code>', methods=['GET'])
 def check_telegram_validation(uuid_code):
-    """Verifica validação do UUID Telegram"""
+    """Verifica validação do UUID Telegram com persistência"""
     try:
+        # Primeiro verifica no banco de dados
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT uuid, username, validated_at, is_active 
+            FROM telegram_users 
+            WHERE uuid = ? AND is_active = TRUE
+        ''', (uuid_code,))
+        
+        user_data = cursor.fetchone()
+        conn.close()
+        
+        if user_data:
+            return jsonify({
+                'success': True,
+                'validated': True,
+                'username': user_data[1],
+                'validated_at': user_data[2]
+            })
+        
+        # Fallback para memória (compatibilidade)
         if not hasattr(app, 'telegram_uuids'):
             app.telegram_uuids = {}
         
@@ -345,41 +460,151 @@ def disconnect_telegram():
 def get_telegram_groups(uuid_code):
     """Retorna grupos conectados do usuário"""
     try:
-        if not hasattr(app, 'telegram_uuids'):
-            app.telegram_uuids = {}
+        # Verifica se usuário está validado no banco
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
         
-        if uuid_code not in app.telegram_uuids:
+        cursor.execute('''
+            SELECT uuid, username, telegram_id 
+            FROM telegram_users 
+            WHERE uuid = ? AND is_active = TRUE
+        ''', (uuid_code,))
+        
+        user_data = cursor.fetchone()
+        
+        if not user_data:
+            conn.close()
             return jsonify({
                 'success': False,
                 'groups': [],
-                'error': 'UUID não encontrado'
+                'error': 'UUID não encontrado ou não validado'
             })
         
-        uuid_data = app.telegram_uuids[uuid_code]
+        # Busca grupos do usuário
+        cursor.execute('''
+            SELECT group_id, group_name, group_type, is_monitored, 
+                   signals_count, last_signal_at, added_at
+            FROM telegram_groups 
+            WHERE user_uuid = ?
+            ORDER BY added_at DESC
+        ''', (uuid_code,))
         
-        if not uuid_data['validated']:
-            return jsonify({
-                'success': False,
-                'groups': [],
-                'error': 'UUID não validado'
+        groups_data = cursor.fetchall()
+        conn.close()
+        
+        # Formata grupos para resposta
+        groups = []
+        for group in groups_data:
+            groups.append({
+                'id': group[0],
+                'name': group[1],
+                'type': group[2],
+                'is_monitored': bool(group[3]),
+                'signals_count': group[4],
+                'last_signal': group[5],
+                'added_at': group[6],
+                'status': 'monitored' if group[3] else 'available'
             })
         
-        # Grupos mock (em produção, buscar do banco de dados)
-        groups = [
-            {
-                'id': 1,
-                'name': 'NexoCrypto Bot',
-                'type': 'bot',
-                'status': 'connected',
-                'signals_count': 0,
-                'last_signal': None
-            }
-        ]
+        # Se não há grupos, adiciona grupos mock para demonstração
+        if not groups:
+            groups = [
+                {
+                    'id': 'demo_1',
+                    'name': 'Binance Killers VIP',
+                    'type': 'supergroup',
+                    'is_monitored': False,
+                    'signals_count': 0,
+                    'last_signal': None,
+                    'added_at': datetime.now().isoformat(),
+                    'status': 'available'
+                },
+                {
+                    'id': 'demo_2', 
+                    'name': 'Crypto Signals Pro',
+                    'type': 'group',
+                    'is_monitored': False,
+                    'signals_count': 0,
+                    'last_signal': None,
+                    'added_at': datetime.now().isoformat(),
+                    'status': 'available'
+                },
+                {
+                    'id': 'demo_3',
+                    'name': 'Trading Academy',
+                    'type': 'channel',
+                    'is_monitored': False,
+                    'signals_count': 0,
+                    'last_signal': None,
+                    'added_at': datetime.now().isoformat(),
+                    'status': 'available'
+                }
+            ]
         
         return jsonify({
             'success': True,
-            'groups': groups
+            'groups': groups,
+            'total_groups': len(groups),
+            'monitored_groups': len([g for g in groups if g['is_monitored']])
         })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'groups': [],
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/toggle-group-monitoring', methods=['POST'])
+def toggle_group_monitoring():
+    """Ativa/desativa monitoramento de um grupo"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        group_id = data.get('group_id')
+        is_monitored = data.get('is_monitored', False)
+        
+        if not uuid_code or not group_id:
+            return jsonify({
+                'success': False,
+                'error': 'UUID e group_id são obrigatórios'
+            }), 400
+        
+        # Conecta ao banco de dados
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Verifica se usuário existe
+        cursor.execute('SELECT uuid FROM telegram_users WHERE uuid = ? AND is_active = TRUE', (uuid_code,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Usuário não encontrado'
+            }), 404
+        
+        # Atualiza ou insere grupo
+        cursor.execute('''
+            INSERT OR REPLACE INTO telegram_groups 
+            (user_uuid, group_id, group_name, is_monitored, added_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (uuid_code, group_id, f"Grupo {group_id}", is_monitored))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': f"Grupo {'ativado' if is_monitored else 'desativado'} para monitoramento",
+            'group_id': group_id,
+            'is_monitored': is_monitored
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
         
     except Exception as e:
         return jsonify({
