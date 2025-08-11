@@ -333,7 +333,7 @@ def validate_telegram_uuid():
         cursor = conn.cursor()
         
         # Verifica se UUID já existe
-        cursor.execute('SELECT * FROM telegram_users WHERE uuid = ?', (uuid_code,))
+        cursor.execute('SELECT * FROM telegram_users WHERE user_uuid = ?', (uuid_code,))
         existing_user = cursor.fetchone()
         
         if existing_user:
@@ -342,7 +342,7 @@ def validate_telegram_uuid():
                 UPDATE telegram_users 
                 SET telegram_id = ?, username = ?, first_name = ?, last_name = ?, 
                     phone_number = ?, validated_at = CURRENT_TIMESTAMP, is_active = TRUE
-                WHERE uuid = ?
+                WHERE user_uuid = ?
             ''', (telegram_id, username, first_name, last_name, phone_number, uuid_code))
         else:
             # Insere novo usuário
@@ -389,9 +389,9 @@ def check_telegram_validation(uuid_code):
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT uuid, username, validated_at, is_active 
+            SELECT user_uuid, username, validated_at, is_active 
             FROM telegram_users 
-            WHERE uuid = ? AND is_active = TRUE
+            WHERE user_uuid = ? AND is_active = 1
         ''', (uuid_code,))
         
         user_data = cursor.fetchone()
@@ -474,7 +474,7 @@ def get_telegram_groups(uuid_code):
         cursor.execute('''
             SELECT uuid, username, telegram_id 
             FROM telegram_users 
-            WHERE uuid = ? AND is_active = TRUE
+            WHERE user_uuid = ? AND is_active = 1
         ''', (uuid_code,))
         
         user_data = cursor.fetchone()
@@ -659,7 +659,7 @@ def toggle_group_monitoring():
         cursor = conn.cursor()
         
         # Verifica se usuário existe
-        cursor.execute('SELECT uuid FROM telegram_users WHERE uuid = ? AND is_active = TRUE', (uuid_code,))
+        cursor.execute('SELECT user_uuid FROM telegram_users WHERE user_uuid = ? AND is_active = 1', (uuid_code,))
         if not cursor.fetchone():
             conn.close()
             return jsonify({
@@ -1403,7 +1403,7 @@ def get_available_groups(uuid_code):
         cursor.execute('''
             SELECT phone_number 
             FROM telegram_users 
-            WHERE uuid = ? AND is_active = TRUE
+            WHERE user_uuid = ? AND is_active = 1
         ''', (uuid_code,))
         
         user_data = cursor.fetchone()
@@ -1502,7 +1502,7 @@ def select_user_groups():
         cursor.execute('''
             SELECT phone_number 
             FROM telegram_users 
-            WHERE uuid = ? AND is_active = TRUE
+            WHERE user_uuid = ? AND is_active = 1
         ''', (uuid_code,))
         
         user_data = cursor.fetchone()
@@ -1590,7 +1590,7 @@ def validate_phone_with_bot():
         cursor.execute('''
             SELECT phone_number, is_active 
             FROM telegram_users 
-            WHERE uuid = ? AND phone_number = ? AND is_active = TRUE
+            WHERE user_uuid = ? AND phone_number = ? AND is_active = 1
         ''', (uuid_code, phone_number))
         
         user_data = cursor.fetchone()
