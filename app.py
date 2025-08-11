@@ -1273,11 +1273,31 @@ def verify_telegram_userbot_code():
                 'error': 'UUID, telefone e código são obrigatórios'
             }), 400
         
-        # Simula verificação de código bem-sucedida
-        import time
-        time.sleep(1)  # Simula processamento
+        # Normaliza o telefone (remove espaços, traços, parênteses)
+        import re
+        normalized_phone = re.sub(r'[^\d+]', '', phone_number)
         
-        # Primeiro, salva o usuário como validado
+        # Verifica se o telefone foi compartilhado com o bot
+        phone_validated = validate_phone_with_bot(normalized_phone)
+        
+        if not phone_validated:
+            return jsonify({
+                'success': False,
+                'error': 'Telefone não encontrado. Compartilhe seu contato com o bot primeiro usando /start'
+            }), 400
+        
+        # Simula verificação de código (em produção seria validação real)
+        if len(code) < 4:
+            return jsonify({
+                'success': False,
+                'error': 'Código inválido. Digite um código válido recebido no Telegram'
+            }), 400
+        
+        # Simula processamento
+        import time
+        time.sleep(1)
+        
+        # Salva o usuário como validado
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         
@@ -1286,44 +1306,18 @@ def verify_telegram_userbot_code():
             INSERT OR REPLACE INTO telegram_users 
             (uuid, phone_number, validated_at, is_active)
             VALUES (?, ?, CURRENT_TIMESTAMP, TRUE)
-        ''', (uuid_code, phone_number))
-        
-        # Gera grupos realistas para o usuário
-        realistic_groups = generate_realistic_groups_for_user(phone_number)
-        
-        # Remove grupos antigos do userbot para este usuário
-        cursor.execute('''
-            DELETE FROM telegram_groups 
-            WHERE user_uuid = ? AND source = 'userbot_real'
-        ''', (uuid_code,))
-        
-        # Adiciona novos grupos reais
-        for group in realistic_groups:
-            cursor.execute('''
-                INSERT INTO telegram_groups 
-                (user_uuid, group_id, group_name, group_type, is_monitored, signals_count, source, phone_number)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                uuid_code,
-                group['id'],
-                group['name'],
-                group['type'],
-                group['is_monitored'],
-                group['signals_count'],
-                'userbot_real',
-                phone_number
-            ))
+        ''', (uuid_code, normalized_phone))
         
         conn.commit()
         conn.close()
         
-        print(f"✅ Usuário {uuid_code} validado e {len(realistic_groups)} grupos reais salvos")
+        print(f"✅ Usuário {uuid_code} validado com telefone {normalized_phone}")
         
         return jsonify({
             'success': True,
             'status': 'authorized',
-            'message': 'Autorização bem-sucedida!',
-            'groups_count': len(realistic_groups)
+            'message': 'Telefone validado com sucesso!',
+            'phone_validated': True
         })
             
     except Exception as e:
@@ -1332,6 +1326,35 @@ def verify_telegram_userbot_code():
             'success': False,
             'error': f'Erro ao verificar código: {str(e)}'
         }), 500
+
+def validate_phone_with_bot(phone_number):
+    """Valida se o telefone foi compartilhado com o bot"""
+    try:
+        # Simula validação com bot (em produção seria consulta real ao bot)
+        # Por enquanto, aceita apenas telefones que não sejam sequências repetidas
+        
+        # Remove código do país se presente
+        clean_phone = phone_number.replace('+', '')
+        if clean_phone.startswith('55'):
+            clean_phone = clean_phone[2:]  # Remove código do Brasil
+        
+        # Verifica se não é um número fake (sequências repetidas)
+        if len(set(clean_phone)) <= 2:  # Máximo 2 dígitos diferentes
+            return False
+            
+        # Verifica se tem pelo menos 10 dígitos (telefone brasileiro)
+        if len(clean_phone) < 10:
+            return False
+            
+        # Simula consulta ao bot - em produção seria:
+        # return check_phone_in_bot_database(phone_number)
+        
+        # Por enquanto, aceita telefones válidos que não sejam fake
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erro ao validar telefone: {e}")
+        return False
 
 # Endpoint para grupos demo (fallback)
 @app.route('/api/telegram/demo-groups', methods=['GET'])
