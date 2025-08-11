@@ -1409,10 +1409,19 @@ def get_available_groups(uuid_code):
         user_data = cursor.fetchone()
         
         if not user_data:
+            # Se UUID não encontrado, gera grupos demo baseado no UUID
+            print(f"UUID {uuid_code} não encontrado, gerando grupos demo")
             conn.close()
+            
+            # Gera grupos demo baseado no UUID
+            available_groups = generate_realistic_groups_for_user(uuid_code)
+            
             return jsonify({
-                'success': False,
-                'error': 'UUID não encontrado ou não validado'
+                'success': True,
+                'groups': available_groups,
+                'total': len(available_groups),
+                'source': 'demo',
+                'message': 'Grupos demo gerados - valide via bot para grupos reais'
             })
         
         phone_number = user_data[0]
@@ -1441,18 +1450,26 @@ def get_available_groups(uuid_code):
                     'username': f"@{group[1].lower().replace(' ', '_')}",
                     'is_monitored': False
                 })
+            
+            return jsonify({
+                'success': True,
+                'groups': available_groups,
+                'total': len(available_groups),
+                'source': 'real'
+            })
         else:
             # Se não há grupos reais, gera grupos baseado no telefone
             available_groups = generate_realistic_groups_for_user(phone_number)
-        
-        return jsonify({
-            'success': True,
-            'groups': available_groups,
-            'total': len(available_groups),
-            'source': 'real' if real_groups else 'demo'
-        })
+            
+            return jsonify({
+                'success': True,
+                'groups': available_groups,
+                'total': len(available_groups),
+                'source': 'demo'
+            })
         
     except Exception as e:
+        print(f"Erro no endpoint available-groups: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
