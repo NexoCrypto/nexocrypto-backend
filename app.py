@@ -1369,6 +1369,140 @@ def get_demo_groups():
             'error': str(e)
         }), 500
 
+@app.route('/api/telegram/available-groups/<uuid_code>', methods=['GET'])
+def get_available_groups(uuid_code):
+    """Retorna grupos disponíveis para seleção do usuário"""
+    try:
+        # Verifica se usuário está validado
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT phone_number 
+            FROM telegram_users 
+            WHERE uuid = ? AND is_active = TRUE
+        ''', (uuid_code,))
+        
+        user_data = cursor.fetchone()
+        conn.close()
+        
+        if not user_data:
+            return jsonify({
+                'success': False,
+                'error': 'UUID não encontrado ou não validado'
+            })
+        
+        phone_number = user_data[0]
+        
+        # Gera grupos disponíveis baseado no telefone
+        available_groups = generate_realistic_groups_for_user(phone_number)
+        
+        return jsonify({
+            'success': True,
+            'groups': available_groups,
+            'total': len(available_groups)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/select-groups', methods=['POST'])
+def select_user_groups():
+    """Salva grupos selecionados pelo usuário"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        selected_group_ids = data.get('selected_groups', [])
+        
+        if not uuid_code or not selected_group_ids:
+            return jsonify({
+                'success': False,
+                'error': 'UUID e grupos selecionados são obrigatórios'
+            })
+        
+        if len(selected_group_ids) != 5:
+            return jsonify({
+                'success': False,
+                'error': 'Você deve selecionar exatamente 5 grupos'
+            })
+        
+        # Verifica se usuário está validado
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT phone_number 
+            FROM telegram_users 
+            WHERE uuid = ? AND is_active = TRUE
+        ''', (uuid_code,))
+        
+        user_data = cursor.fetchone()
+        
+        if not user_data:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'UUID não encontrado ou não validado'
+            })
+        
+        phone_number = user_data[0]
+        
+        # Gera todos os grupos disponíveis
+        available_groups = generate_realistic_groups_for_user(phone_number)
+        
+        # Filtra apenas os grupos selecionados
+        selected_groups = [group for group in available_groups if group['id'] in selected_group_ids]
+        
+        if len(selected_groups) != 5:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Alguns grupos selecionados não foram encontrados'
+            })
+        
+        # Remove grupos antigos do userbot para este usuário
+        cursor.execute('''
+            DELETE FROM telegram_groups 
+            WHERE user_uuid = ? AND source = 'userbot_real'
+        ''', (uuid_code,))
+        
+        # Adiciona grupos selecionados
+        for group in selected_groups:
+            cursor.execute('''
+                INSERT INTO telegram_groups 
+                (user_uuid, group_id, group_name, group_type, is_monitored, 
+                 signals_count, last_signal_at, added_at, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                uuid_code,
+                group['id'],
+                group['name'],
+                group['type'],
+                group['is_monitored'],
+                group['signals_count'],
+                group['last_signal'],
+                datetime.now().isoformat(),
+                'userbot_real'
+            ))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Grupos selecionados salvos com sucesso',
+            'selected_groups': selected_groups
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
