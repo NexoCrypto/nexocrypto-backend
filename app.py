@@ -1407,9 +1407,9 @@ def get_available_groups(uuid_code):
         ''', (uuid_code,))
         
         user_data = cursor.fetchone()
-        conn.close()
         
         if not user_data:
+            conn.close()
             return jsonify({
                 'success': False,
                 'error': 'UUID não encontrado ou não validado'
@@ -1417,13 +1417,39 @@ def get_available_groups(uuid_code):
         
         phone_number = user_data[0]
         
-        # Gera grupos disponíveis baseado no telefone
-        available_groups = generate_realistic_groups_for_user(phone_number)
+        # Busca grupos reais salvos do userbot
+        cursor.execute('''
+            SELECT group_id, group_name, group_type, members_count, signals_count
+            FROM telegram_groups 
+            WHERE user_uuid = ? AND source = 'userbot_real'
+            ORDER BY group_name
+        ''', (uuid_code,))
+        
+        real_groups = cursor.fetchall()
+        conn.close()
+        
+        if real_groups:
+            # Retorna grupos reais capturados
+            available_groups = []
+            for group in real_groups:
+                available_groups.append({
+                    'id': group[0],
+                    'name': group[1],
+                    'type': group[2],
+                    'members': group[3] or 0,
+                    'signals_count': group[4] or 0,
+                    'username': f"@{group[1].lower().replace(' ', '_')}",
+                    'is_monitored': False
+                })
+        else:
+            # Se não há grupos reais, gera grupos baseado no telefone
+            available_groups = generate_realistic_groups_for_user(phone_number)
         
         return jsonify({
             'success': True,
             'groups': available_groups,
-            'total': len(available_groups)
+            'total': len(available_groups),
+            'source': 'real' if real_groups else 'demo'
         })
         
     except Exception as e:
@@ -1519,6 +1545,52 @@ def select_user_groups():
             'message': 'Grupos selecionados salvos com sucesso',
             'selected_groups': selected_groups
         })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/telegram/validate-phone-with-bot', methods=['POST'])
+def validate_phone_with_bot():
+    """Valida se o telefone está registrado no bot"""
+    try:
+        data = request.get_json()
+        uuid_code = data.get('uuid')
+        phone_number = data.get('phone_number')
+        
+        if not uuid_code or not phone_number:
+            return jsonify({
+                'success': False,
+                'error': 'UUID e telefone são obrigatórios'
+            })
+        
+        # Verifica se o telefone está registrado no bot
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT phone_number, is_active 
+            FROM telegram_users 
+            WHERE uuid = ? AND phone_number = ? AND is_active = TRUE
+        ''', (uuid_code, phone_number))
+        
+        user_data = cursor.fetchone()
+        conn.close()
+        
+        if user_data:
+            return jsonify({
+                'success': True,
+                'message': 'Telefone validado com sucesso',
+                'phone_registered': True
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Telefone não encontrado ou não validado via bot',
+                'phone_registered': False
+            })
         
     except Exception as e:
         return jsonify({
